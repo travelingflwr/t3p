@@ -40,11 +40,15 @@ type Place struct {
 	Last     *time.Time `json:"last,omitempty"`   // the latest of T3 activity and the last commit
 	Due      *time.Time `json:"due,omitempty"`
 	Overdue  bool       `json:"overdue,omitempty"`
+	Owner    string     `json:"owner,omitempty"`   // the machine whose t3p owns it, when not this one
+	Offline  bool       `json:"offline,omitempty"` // that machine couldn't be reached: its last list
 	Meta
 
-	kind    *Kind
-	host    Host
-	t3Order int
+	owner     *Machine
+	remoteKey string // its key on the machine that owns it
+	kind      *Kind
+	host      Host
+	t3Order   int
 }
 
 func (p *Place) status() string {
@@ -61,6 +65,9 @@ type Index struct {
 	now    time.Time
 	Places []*Place
 	T3Err  error // T3's list couldn't be read: places show without it
+
+	exports     map[string]*Export // each other machine's own list, by name
+	MachineErrs map[string]error   // the machines that couldn't be reached
 }
 
 func placeKey(h Host, p string) string {
@@ -81,8 +88,11 @@ func (ix *Index) machineOf(k *Kind) string {
 	return ""
 }
 
-func buildIndex(cfg *Config, t3 *T3, store *Store, details bool) *Index {
-	ix := &Index{cfg: cfg, t3: t3, store: store, now: time.Now()}
+// buildIndex lists every place. local leaves the other machines out, which
+// is how another t3p asks this one for its own.
+func buildIndex(cfg *Config, t3 *T3, store *Store, details, local bool) *Index {
+	ix := &Index{cfg: cfg, t3: t3, store: store, now: time.Now(),
+		exports: map[string]*Export{}, MachineErrs: map[string]error{}}
 	byKey := map[string]*Place{}
 	add := func(p *Place) *Place {
 		if old := byKey[p.Key]; old != nil {
@@ -111,13 +121,56 @@ func buildIndex(cfg *Config, t3 *T3, store *Store, details bool) *Index {
 		}
 	}
 
+	// 1b. Each other machine's places, from its own t3p, asked in parallel.
+	remoteByPath := map[string]map[string]*Place{}
+	if !local {
+		type got struct {
+			m       *Machine
+			ex      *Export
+			offline bool
+			err     error
+		}
+		results := make(chan got, len(cfg.Machines))
+		for _, m := range cfg.Machines {
+			go func(m *Machine) {
+				ex, offline, err := m.fetch()
+				results <- got{m, ex, offline, err}
+			}(m)
+		}
+		for range cfg.Machines {
+			g := <-results
+			if g.err != nil {
+				ix.MachineErrs[g.m.Name] = g.err
+			}
+			if g.ex == nil {
+				continue
+			}
+			ix.exports[g.m.Name] = g.ex
+			remoteByPath[g.m.Name] = map[string]*Place{}
+			for _, q := range g.ex.Places {
+				p := *q
+				p.remoteKey, p.Key = q.Key, "m:"+g.m.Name+":"+q.Key
+				p.Owner, p.Machine, p.owner, p.Offline = g.m.Name, g.m.Name, g.m, g.offline
+				p.T3, p.Activity, p.t3Order = "", "", -1 // joined below, from tr3x
+				add(&p)
+				remoteByPath[g.m.Name][p.Path] = byKey[p.Key]
+			}
+		}
+	}
+
 	// 2. T3's projects, joined to those folders by machine and exact path.
 	projects, err := t3.Projects()
 	ix.T3Err = err
 	me := t3.Me()
 	for _, tp := range projects {
 		var hit *Place
+		if ex := ix.exports[tp.Machine]; ex != nil {
+			hit = remoteByPath[tp.Machine][ex.expand(tp.Path)]
+		}
 		for _, k := range cfg.Kinds {
+			if hit != nil {
+				break
+			}
 			m := ix.machineOf(k)
 			if m == "" || m != tp.Machine {
 				continue
@@ -158,6 +211,12 @@ func buildIndex(cfg *Config, t3 *T3, store *Store, details bool) *Index {
 
 	// 3. What t3p remembers, and what follows from it.
 	for _, p := range ix.Places {
+		if p.owner != nil { // its machine worked these out; add T3's activity
+			if t := t3Ago(p.Activity, ix.now); !t.IsZero() && (p.Last == nil || t.After(*p.Last)) {
+				p.Last = &t
+			}
+			continue
+		}
 		p.Meta = store.peek(p.Key)
 		if p.host != nil {
 			p.Display = p.host.Display(p.Path)

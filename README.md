@@ -67,6 +67,30 @@ worktrees = false
 
 Notes, tags, statuses and due dates are kept in `~/.local/state/t3p/places.json` (`%LOCALAPPDATA%\t3p` on Windows). That file stays on the machine, and nothing in it goes to T3.
 
+## Other machines
+
+Each machine runs its own t3p, and that t3p **owns the places whose folders are there**: their notes, statuses and due dates. Name the other machines in your config:
+
+```toml
+[[machine]]
+name = "mallard"            # as T3 names it (tr3x envs)
+ssh  = "mallard"            # the ssh destination; default: name
+t3p  = "~/.local/bin/t3p"   # t3p there; this is the default
+```
+
+To list everything, your t3p asks each machine's t3p for its places in one SSH call (`t3p export`) and merges them with what tr3x knows about that machine's T3. Changes are sent to the machine that owns the place, and that machine's t3p makes them: a note, park or close, adding a folder to T3, or `t3p new --machine mallard case 123`.
+
+- **Nothing is copied between machines,** so nothing needs syncing, and work data stays on the machine it belongs to.
+- **A machine that can't be reached** shows the last list it sent, marked *offline*. It's read-only until that machine is back.
+- **Each other machine needs** t3p, the `t3` CLI, and `ssh <name>` working without a password. tr3x is only needed on the machine you work from. Each machine's own `~/.config/t3p/config.toml` names its kinds.
+
+Install on a Linux machine from here:
+
+```sh
+GOOS=linux GOARCH=amd64 go build -o t3p-linux . && scp t3p-linux mallard:.local/bin/t3p
+t3p doctor        # checks each machine too
+```
+
 ## Mac, Linux and Windows
 
 - **Mac and Linux:** every kind runs on the local machine unless its config says otherwise.

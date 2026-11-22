@@ -281,6 +281,7 @@ local function new_of_kind(k)
     name = trim(name)
     if name == "" then return end
     local args = { "new", k.name, name }
+    if k.machine then args[#args + 1] = "--machine"; args[#args + 1] = k.machine end
     if k.severities and #k.severities > 0 then
       local items = {}
       for _, s in ipairs(k.severities) do items[#items + 1] = { id = tostring(s), title = "Sev " .. s } end
@@ -376,7 +377,7 @@ local function shell()
   local places = t3p_json({ "ls", "--json" })
   for _, p in ipairs(places) do
     if p.key == key then
-      if p.remote then fail(p.name .. " is on " .. (p.machine or "another machine")) end
+      if p.remote or p.owner then fail(p.name .. " is on " .. (p.owner or p.machine or "another machine") .. "; a shell there isn't supported yet") end
       if p.host ~= "local" then fail("a shell in " .. p.host .. " isn't supported yet") end
       local s, err = rex.call("session.create", { label = p.name, initial_windows = { {
         window_label = "shell",
@@ -416,8 +417,14 @@ if ok and type(kinds) == "table" then
       -- made Rex's Lua (gopher-lua) panic before.
       local id = k.name:gsub("%W", "_")
       local title = k.name:gsub("^%l", string.upper)
-      action("t3p_new_" .. id, "New " .. title .. "…",
-        "Create a " .. k.name .. " from its template, add it to T3 and start a thread",
+      local on = ""
+      if k.machine then
+        local mid = k.machine:gsub("%W", "_")
+        id = mid .. "_" .. id
+        on = " on " .. k.machine
+      end
+      action("t3p_new_" .. id, "New " .. title .. on .. "…",
+        "Create a " .. k.name .. on .. " from its template, add it to T3 and start a thread",
         "t3p t3 new create " .. k.name .. " " .. k.plural, new_of_kind(k))
     end
   end

@@ -77,11 +77,23 @@ func joinOn(h Host, dir, name string) string {
 // resolve makes p a T3 project if it isn't one, and says how to open a
 // thread in it.
 func (ix *Index) resolve(p *Place) (*Resolved, error) {
+	if p.owner != nil && p.T3 == "" { // its machine adds it to T3 there
+		out, err := ix.forward(p, "resolve", "\x00key")
+		if err != nil {
+			return nil, err
+		}
+		return ix.adopt(p.owner, out)
+	}
 	r := &Resolved{Key: p.Key, Name: p.Name, Kind: p.Kind, T3: p.T3}
 	if p.kind != nil {
 		r.Worktrees = p.kind.worktrees()
 	} else {
 		r.Worktrees = p.Git != nil || p.Remote
+	}
+	if p.owner != nil { // already in T3: nothing to do there
+		r.Last = ix.store.Last[p.T3]
+		_, r.Project, _ = strings.Cut(p.T3, "/")
+		return r, nil
 	}
 	if p.T3 == "" {
 		if p.Remote || p.host == nil {
@@ -238,6 +250,9 @@ func (ix *Index) checks(reach bool) []Finding {
 		}
 	}
 	for _, p := range ix.Places {
+		if p.Offline {
+			continue // an old list: nothing to act on until its machine is back
+		}
 		open := p.status() == "open"
 		switch {
 		case p.Overdue:
@@ -246,8 +261,8 @@ func (ix *Index) checks(reach bool) []Finding {
 		case p.T3 != "" && !p.Remote && !p.Exists:
 			raise(p, "orphan", "in T3, but its folder is gone: "+p.Display, fixes("close", "ignore"))
 		}
-		if p.kind != nil && p.T3 == "" && p.Exists && open {
-			raise(p, "untracked", "a "+p.kind.Name+" T3 doesn't have", fixes("add", "park", "ignore"))
+		if p.Kind != "" && p.T3 == "" && p.Exists && open {
+			raise(p, "untracked", "a "+p.Kind+" T3 doesn't have", fixes("add", "park", "ignore"))
 		}
 		if p.T3 != "" && open && p.Last != nil && ix.now.Sub(*p.Last) > ix.cfg.stale {
 			raise(p, "stale", "nothing for "+span(ix.now.Sub(*p.Last)), fixes("park", "close", "ignore"))
@@ -255,7 +270,7 @@ func (ix *Index) checks(reach bool) []Finding {
 		if p.T3 != "" && !p.Remote && p.Exists {
 			n := 0
 			for _, q := range local {
-				if q != p && q.Host == p.Host && within(q.Path, p.Path) {
+				if q != p && q.Owner == p.Owner && q.Host == p.Host && within(q.Path, p.Path) {
 					n++
 				}
 			}
@@ -268,7 +283,7 @@ func (ix *Index) checks(reach bool) []Finding {
 					fixes("close", "ignore"))
 			}
 		}
-		if reach && open && p.kind != nil && len(p.kind.Track) > 0 && p.T3 != "" {
+		if reach && open && p.kind != nil && p.owner == nil && len(p.kind.Track) > 0 && p.T3 != "" {
 			if _, skipped := ix.tracks(p); len(skipped) > 0 {
 				raise(p, "unreachable", "can't reach "+strings.Join(skipped, ", "), fixes("ignore"))
 			}

@@ -24,7 +24,7 @@ const usage = `t3p: your work in T3 Code, by kind.
   t3p rows [--kind K] [--all]            the same, as Rex palette rows
   t3p kinds [--json]                     the kinds of work this machine has
   t3p resolve [--kind K] <place|folder>  make it a T3 project if needed; print how to open it
-  t3p new <kind> <name> [--sev N]        create one from the kind's template, add it to T3
+  t3p new <kind> <name> [--sev N] [--machine M]  create one from the kind's template, add it to T3
   t3p note <place> [text…] [--clear]     a one-line note: what is this?
   t3p tag <place> +tag -tag …
   t3p park | open | close <place>        close: out of the picker, off T3's list if it has no
@@ -37,7 +37,11 @@ const usage = `t3p: your work in T3 Code, by kind.
   t3p mkdir [--kind K] [--git] <dir> <name>  a new folder in dir (--git: a repository)
   t3p last <env/project> [workspace]     the worktree a project was last opened in
   t3p config [init]                      where the config is; init writes an example
-  t3p doctor                             check the setup
+  t3p doctor                             check the setup, and each machine's
+  t3p export                             this machine's own places, for another t3p
+
+Other machines ([[machine]] in the config) run their own t3p, which owns
+their places; changes to them are made there. --local leaves them out.
 
 A <place> is a name, a path, or a key from ls --json.
 `
@@ -91,6 +95,7 @@ type env struct {
 	cfg   *Config
 	t3    *T3
 	store *Store
+	local bool // --local: this machine's places only, for another t3p
 }
 
 func setup() (*env, error) {
@@ -105,7 +110,7 @@ func setup() (*env, error) {
 	return &env{cfg: cfg, t3: findT3(), store: store}, nil
 }
 
-func (e *env) index(details bool) *Index { return buildIndex(e.cfg, e.t3, e.store, details) }
+func (e *env) index(details bool) *Index { return buildIndex(e.cfg, e.t3, e.store, details, e.local) }
 
 // one finds exactly one place for q.
 func (ix *Index) one(q string) (*Place, error) {
@@ -146,7 +151,8 @@ func run(argv []string) error {
 	if err != nil {
 		return err
 	}
-	a := parseArgs(rest, "json", "all", "clear", "reach", "git")
+	a := parseArgs(rest, "json", "all", "clear", "reach", "git", "local")
+	e.local = a.has("local")
 
 	need := func(n int, what string) error {
 		if len(a.pos) < n {
@@ -162,6 +168,15 @@ func run(argv []string) error {
 		ix := e.index(false)
 		p, err := ix.one(a.pos[0])
 		if err != nil {
+			return err
+		}
+		if p.owner != nil { // another machine's: its t3p makes the change
+			fwd := []string{cmd, "\x00key"}
+			if a.has("clear") {
+				fwd = append(fwd, "--clear")
+			}
+			out, err := ix.forward(p, append(append(fwd, "--"), a.pos[1:]...)...)
+			fmt.Print(out)
 			return err
 		}
 		if err := f(ix, p); err != nil {
@@ -185,26 +200,37 @@ func run(argv []string) error {
 		return printJSON(rows(ix, filterPlaces(ix, a.flags["kind"], a.has("all"))))
 
 	case "kinds":
-		type kindOut struct {
-			Name       string `json:"name"`
-			Plural     string `json:"plural"`
-			Host       string `json:"host"`
-			Create     bool   `json:"create"`
-			Worktrees  bool   `json:"worktrees"`
-			Severities []int  `json:"severities,omitempty"`
-			Match      string `json:"match,omitempty"`
-		}
-		var out []kindOut
-		for _, k := range e.cfg.Kinds {
-			out = append(out, kindOut{k.Name, k.Plural, k.host.ID(), k.Create, k.worktrees(), k.severities(), k.Match})
+		// This machine's kinds, and the other machines' from their last list,
+		// so Rex can start without waiting on ssh.
+		out := e.cfg.kindInfos()
+		if !e.local {
+			for _, m := range e.cfg.Machines {
+				if ex := m.cached(); ex != nil {
+					for _, k := range ex.Kinds {
+						k.Machine = m.Name
+						out = append(out, k)
+					}
+				}
+			}
 		}
 		if a.has("json") {
 			return printJSON(out)
 		}
 		for _, k := range out {
-			fmt.Printf("%s (%s) on %s\n", k.Name, k.Plural, k.Host)
+			where := k.Host
+			if k.Machine != "" {
+				where = k.Machine + " (" + k.Host + ")"
+			}
+			fmt.Printf("%s (%s) on %s\n", k.Name, k.Plural, where)
 		}
 		return nil
+
+	case "export":
+		// This machine's own places, for another machine's t3p.
+		e.local = true
+		ix := e.index(true)
+		return printJSON(Export{Machine: e.t3.Me(), Home: localHost{}.Home(), Version: version,
+			Kinds: e.cfg.kindInfos(), Places: filterPlaces(ix, "", true), At: time.Now()})
 
 	case "resolve":
 		if err := need(1, "<place>"); err != nil {
@@ -247,15 +273,34 @@ func run(argv []string) error {
 		if err := need(2, "<kind> <name> [--sev N]"); err != nil {
 			return err
 		}
-		k := e.cfg.kind(a.pos[0])
-		if k == nil {
-			return fmt.Errorf("no kind called %q", a.pos[0])
-		}
 		sev := 0
 		if s := a.flags["sev"]; s != "" {
 			if sev, err = strconv.Atoi(s); err != nil {
 				return fmt.Errorf("--sev is a number")
 			}
+		}
+		if name := a.flags["machine"]; name != "" { // made there, by its t3p
+			m := e.cfg.machine(name)
+			if m == nil {
+				return fmt.Errorf("no machine called %q in %s", name, configPath())
+			}
+			fwd := []string{"new", a.pos[0], "--"}
+			if sev != 0 {
+				fwd = []string{"new", a.pos[0], "--sev", fmt.Sprint(sev), "--"}
+			}
+			out, err := m.run(120*time.Second, append(fwd, a.pos[1:]...)...)
+			if err != nil {
+				return err
+			}
+			r, err := e.index(false).adopt(m, out)
+			if err != nil {
+				return err
+			}
+			return printJSON(r)
+		}
+		k := e.cfg.kind(a.pos[0])
+		if k == nil {
+			return fmt.Errorf("no kind called %q", a.pos[0])
 		}
 		ix := e.index(false)
 		r, err := ix.create(k, strings.Join(a.pos[1:], " "), sev)
@@ -437,6 +482,9 @@ func facts(ix *Index, p *Place) []string {
 	if len(ix.cfg.Kinds) > 1 && p.Kind != "" {
 		f = append(f, p.Kind)
 	}
+	if p.Offline {
+		f = append(f, "offline")
+	}
 	if p.Status == "parked" || p.Status == "closed" {
 		f = append(f, p.Status)
 	}
@@ -511,6 +559,9 @@ func rows(ix *Index, places []*Place) []Row {
 func printTable(ix *Index, places []*Place) {
 	if ix.T3Err != nil {
 		fmt.Fprintln(os.Stderr, "t3p: without T3's list:", ix.T3Err)
+	}
+	for name, err := range ix.MachineErrs {
+		fmt.Fprintf(os.Stderr, "t3p: %s: showing its last list (%v)\n", name, err)
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tFACTS\tWHAT IT IS")
@@ -650,8 +701,17 @@ func doctor(e *env) error {
 	} else {
 		say(true, "config: none, so one kind (project, in ~/Projects)", "")
 	}
-	say(e.t3.tr3x != "", "tr3x: "+orDefault(e.t3.tr3x, "not found"),
-		"Install tr3x, or set T3P_TR3X. Without it t3p can add folders to T3 but not list T3's projects.")
+	switch {
+	case e.t3.tr3x != "":
+		say(true, "tr3x: "+e.t3.tr3x, "")
+	case e.local:
+		// Another machine's t3p is asking: tr3x is only needed where you
+		// work from, which lists every machine's T3 projects already.
+		fmt.Println("– tr3x: not here, and not needed: the machine asking has it")
+	default:
+		say(false, "tr3x: not found",
+			"Install tr3x, or set T3P_TR3X. Without it t3p can add folders to T3 but not list T3's projects.")
+	}
 	say(e.t3.t3 != "", "t3 CLI: "+orDefault(e.t3.t3, "not found"), "Install T3 Code's CLI, or set T3P_T3.")
 	if e.t3.tr3x != "" {
 		me := e.t3.Me()
@@ -678,6 +738,22 @@ func doctor(e *env) error {
 		if k.host.ID() != "local" && k.Machine == "" {
 			say(false, k.Name+": which T3 environment is "+k.host.ID()+"?",
 				`Set machine = "<name>" for the kind, as T3 names that environment, so its projects join up.`)
+		}
+	}
+	for _, m := range e.cfg.Machines {
+		out, err := m.run(30*time.Second, "version")
+		say(err == nil, fmt.Sprintf("machine %s: %s", m.Name, orDefault(strings.TrimSpace(out), fmt.Sprint(err))),
+			"t3p and the t3 CLI must be on "+m.Name+" (t3p at "+orDefault(m.T3P, "~/.local/bin/t3p")+"), and `ssh "+orDefault(m.SSH, m.Name)+"` must work without a password.")
+		if err == nil {
+			rep, derr := m.run(60*time.Second, "doctor")
+			for _, line := range strings.Split(strings.TrimSpace(rep), "\n") {
+				if line != "" {
+					fmt.Println("    " + m.Name + ": " + line)
+				}
+			}
+			if derr != nil {
+				bad++
+			}
 		}
 	}
 	say(true, "state: "+e.store.path, "")

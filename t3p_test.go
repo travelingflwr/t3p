@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -494,5 +495,149 @@ func TestGitOnlyForARepositorysTopFolder(t *testing.T) {
 	}
 	if g := gitInfo(localHost{}, t.TempDir()); g != nil {
 		t.Fatal("nor a folder outside any repository")
+	}
+}
+
+// ---- other machines ------------------------------------------------------
+
+// farbox is a stand-in for another machine's t3p over ssh: export prints
+// its places; anything else is logged and answered from replies.
+type farbox struct {
+	calls   [][]string
+	down    bool
+	replies map[string]string
+}
+
+func (f *farbox) install(t *testing.T) {
+	old := sshRun
+	t.Cleanup(func() { sshRun = old })
+	sshRun = func(m *Machine, _ time.Duration, args ...string) (string, error) {
+		f.calls = append(f.calls, args)
+		if f.down {
+			return "", errors.New("ssh: connect to host farbox: Operation timed out")
+		}
+		if args[0] == "export" {
+			return `{"machine":"farbox","home":"/home/u","version":"0.1.0",
+			 "kinds":[{"name":"case","plural":"cases","host":"local","create":true,"worktrees":false,"severities":[1,2]}],
+			 "places":[
+			  {"key":"/home/u/Cases/123","name":"123","kind":"case","host":"local","path":"/home/u/Cases/123","display":"~/Cases/123","exists":true,"note":"remote note","sev":2},
+			  {"key":"/home/u/Cases/456","name":"456","kind":"case","host":"local","path":"/home/u/Cases/456","display":"~/Cases/456","exists":true}]}`, nil
+		}
+		return f.replies[args[0]], nil
+	}
+}
+
+func farWorld(t *testing.T) (*world, *farbox) {
+	w := newWorld(t)
+	w.config("[[machine]]\nname = \"farbox\"\n")
+	// tr3x names farbox's project by its full path, the way it prints another machine's.
+	w.projects(`[{"id":"envF/c1","title":"123","subtitle":"/home/u/Cases/123 · farbox","detail":"2h ago"}]`)
+	f := &farbox{replies: map[string]string{}}
+	f.install(t)
+	return w, f
+}
+
+func TestOtherMachinesPlacesJoinTheirT3Projects(t *testing.T) {
+	_, f := farWorld(t)
+	e, ix := (&world{}).indexWith(t)
+	p, err := ix.one("m:farbox:/home/u/Cases/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.T3 != "envF/c1" || p.Owner != "farbox" || p.Note != "remote note" || p.Remote || p.Last == nil {
+		t.Fatalf("%+v", p)
+	}
+	if len(e.store.Places) != 0 {
+		t.Fatal("nothing about farbox's places is kept here")
+	}
+	if got := f.calls[0]; strings.Join(got, " ") != "export --local" {
+		t.Fatalf("one call, and farbox doesn't ask further: %q", got)
+	}
+	// Its kinds come from the last list, without ssh, for Rex's startup.
+	f.calls = nil
+	if err := run([]string{"kinds", "--json"}); err != nil || len(f.calls) != 0 {
+		t.Fatalf("kinds asked over ssh: %v %v", f.calls, err)
+	}
+}
+
+// indexWith builds the index with the environment newWorld set.
+func (*world) indexWith(t *testing.T) (*env, *Index) {
+	e, err := setup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, e.index(false)
+}
+
+func TestChangesGoToTheMachineThatOwnsThePlace(t *testing.T) {
+	_, f := farWorld(t)
+	if err := run([]string{"note", "m:farbox:/home/u/Cases/123", "it's", "the", "VPN"}); err != nil {
+		t.Fatal(err)
+	}
+	last := f.calls[len(f.calls)-1]
+	if strings.Join(last, "|") != "note|--local|/home/u/Cases/123|--|it's|the|VPN" {
+		t.Fatalf("forwarded: %q", last)
+	}
+	e, _ := setup()
+	if len(e.store.Places) != 0 {
+		t.Fatal("the note isn't kept here")
+	}
+	// Adding to T3 happens there; the id comes back with tr3x's environment.
+	f.replies["resolve"] = `{"key":"/home/u/Cases/456","name":"456","project":"c2","added":true,"worktrees":false}`
+	w := &world{t: t, fake: os.Getenv("T3P_TR3X")[:len(os.Getenv("T3P_TR3X"))-len("/tr3x")]}
+	_, ix := w.indexWith(t)
+	p, _ := ix.one("m:farbox:/home/u/Cases/456")
+	if p.T3 != "" {
+		t.Fatal("456 isn't in T3 yet")
+	}
+	// farbox adds it; then tr3x lists it.
+	w.projects(`[{"id":"envF/c1","title":"123","subtitle":"/home/u/Cases/123 · farbox"},
+	 {"id":"envF/c2","title":"456","subtitle":"/home/u/Cases/456 · farbox"}]`)
+	r, err := ix.resolve(p)
+	if err != nil || r.T3 != "envF/c2" || r.Key != "m:farbox:/home/u/Cases/456" || !r.Added {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if last := f.calls[len(f.calls)-1]; strings.Join(last, " ") != "resolve --local /home/u/Cases/456" {
+		t.Fatalf("resolved there: %q", last)
+	}
+	if strings.Contains(w.t3log(), "project add") {
+		t.Fatal("this machine's t3 isn't asked to add another machine's folder")
+	}
+}
+
+func TestAMachineThatCantBeReachedShowsItsLastList(t *testing.T) {
+	_, f := farWorld(t)
+	_, ix := (&world{}).indexWith(t) // reachable once: the list is kept
+	if len(ix.MachineErrs) != 0 {
+		t.Fatal(ix.MachineErrs)
+	}
+	f.down = true
+	_, ix = (&world{}).indexWith(t)
+	p, err := ix.one("m:farbox:/home/u/Cases/123")
+	if err != nil || !p.Offline || ix.MachineErrs["farbox"] == nil {
+		t.Fatalf("offline copy: %+v %v", p, err)
+	}
+	for _, c := range ix.checks(false) {
+		if c.Key == p.Key {
+			t.Fatal("no fixes offered for an old list")
+		}
+	}
+	if err := run([]string{"park", p.Key}); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("a change while it's offline: %v", err)
+	}
+}
+
+func TestRemoteCommandQuoting(t *testing.T) {
+	m := &Machine{Name: "x"}
+	if got := m.command("note", "k", "it's $HOME `x`"); got != `"$HOME"/'.local/bin/t3p' 'note' 'k' 'it'\''s $HOME `+"`x`"+`'` {
+		t.Fatalf("%s", got)
+	}
+	m.T3P = "/opt/t3p"
+	if got := m.command("ls"); got != `'/opt/t3p' 'ls'` {
+		t.Fatalf("%s", got)
+	}
+	ex := &Export{Home: "/home/u"}
+	if ex.expand("~/Cases/1") != "/home/u/Cases/1" || ex.expand("/srv/x") != "/srv/x" {
+		t.Fatal("expand")
 	}
 }

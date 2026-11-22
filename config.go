@@ -45,8 +45,9 @@ type Kind struct {
 }
 
 type Config struct {
-	StaleAfter string  `toml:"stale_after"` // default 90d
-	Kinds      []*Kind `toml:"kind"`
+	StaleAfter string     `toml:"stale_after"` // default 90d
+	Kinds      []*Kind    `toml:"kind"`
+	Machines   []*Machine `toml:"machine"` // other machines whose t3p owns their places
 
 	stale time.Duration
 	Path  string // the file it was read from
@@ -116,6 +117,17 @@ func (cfg *Config) prepare() error {
 	var err error
 	if cfg.stale, err = parseDuration(orDefault(cfg.StaleAfter, "90d")); err != nil {
 		return fmt.Errorf("stale_after: %w", err)
+	}
+	machines := map[string]bool{}
+	for _, m := range cfg.Machines {
+		m.Name = strings.TrimSpace(m.Name)
+		if m.Name == "" {
+			return fmt.Errorf("a [[machine]] has no name")
+		}
+		if machines[strings.ToLower(m.Name)] {
+			return fmt.Errorf("two machines are called %q", m.Name)
+		}
+		machines[strings.ToLower(m.Name)] = true
 	}
 	seen := map[string]bool{}
 	for _, k := range cfg.Kinds {
@@ -219,6 +231,14 @@ stale_after = "90d"   # no thread or commit for this long: Tidy Up asks about it
 name  = "project"
 roots = ["~/Projects"]
 detect = "git"        # git: only repositories. any: every folder.
+
+# Other machines, each running its own t3p (and the t3 CLI). Their places are
+# listed here and changed there; nothing is copied between machines.
+#
+# [[machine]]
+# name = "mallard"        # as T3 names it (tr3x envs)
+# ssh  = "mallard"        # the ssh destination; default name
+# t3p  = "~/.local/bin/t3p"
 
 # A kind you create from a template, with due dates by severity, that also
 # works in a share outside its folder. Uncomment and adjust.
