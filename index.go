@@ -4,6 +4,7 @@ package main
 // remembers. A place is a folder of some kind, a T3 project, or both.
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -40,6 +41,7 @@ type Place struct {
 	Last     *time.Time `json:"last,omitempty"`   // the latest of T3 activity and the last commit
 	Due      *time.Time `json:"due,omitempty"`
 	Overdue  bool       `json:"overdue,omitempty"`
+	Scratch  bool       `json:"scratch,omitempty"` // T3's own place for threads with no project
 	Owner    string     `json:"owner,omitempty"`   // the machine whose t3p owns it, when not this one
 	Offline  bool       `json:"offline,omitempty"` // that machine couldn't be reached: its last list
 	Meta
@@ -211,6 +213,9 @@ func buildIndex(cfg *Config, t3 *T3, store *Store, details, local bool) *Index {
 
 	// 3. What t3p remembers, and what follows from it.
 	for _, p := range ix.Places {
+		if isScratch(p.Path) {
+			p.Scratch, p.Name = true, "No project"
+		}
 		if p.owner != nil { // its machine worked these out; add T3's activity
 			if t := t3Ago(p.Activity, ix.now); !t.IsZero() && (p.Last == nil || t.After(*p.Last)) {
 				p.Last = &t
@@ -258,6 +263,20 @@ func buildIndex(cfg *Config, t3 *T3, store *Store, details, local bool) *Index {
 
 	ix.sort()
 	return ix
+}
+
+// isScratch says whether p is T3's scratch folder, where T3 starts a thread
+// that has no project: <T3 home>/scratch, ~/.t3/scratch by default, on any
+// machine. It belongs to T3: never closed, flagged or counted as nesting.
+func isScratch(p string) bool {
+	p = strings.TrimRight(strings.ReplaceAll(p, `\`, "/"), "/")
+	if strings.HasSuffix(p, "/.t3/scratch") || p == "~/.t3/scratch" {
+		return true
+	}
+	if h := os.Getenv("T3CODE_HOME"); h != "" {
+		return p == strings.TrimRight(strings.ReplaceAll(h, `\`, "/"), "/")+"/scratch"
+	}
+	return false
 }
 
 func (k *Kind) accepts(f Folder) bool {
@@ -324,6 +343,12 @@ func (ix *Index) sort() {
 	rank := map[string]int{"open": 0, "parked": 1, "closed": 2}
 	sort.SliceStable(ix.Places, func(i, j int) bool {
 		a, b := ix.Places[i], ix.Places[j]
+		if a.Scratch != b.Scratch { // no project first, as T3 lists it
+			return a.Scratch
+		}
+		if a.Scratch && (a.Machine == "") != (b.Machine == "") { // this machine's first
+			return a.Machine == ""
+		}
 		if ra, rb := rank[a.status()], rank[b.status()]; ra != rb {
 			return ra < rb
 		}

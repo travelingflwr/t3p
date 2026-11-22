@@ -85,9 +85,12 @@ func (ix *Index) resolve(p *Place) (*Resolved, error) {
 		return ix.adopt(p.owner, out)
 	}
 	r := &Resolved{Key: p.Key, Name: p.Name, Kind: p.Kind, T3: p.T3}
-	if p.kind != nil {
+	switch {
+	case p.Scratch:
+		r.Worktrees = false
+	case p.kind != nil:
 		r.Worktrees = p.kind.worktrees()
-	} else {
+	default:
 		r.Worktrees = p.Git != nil || p.Remote
 	}
 	if p.owner != nil { // already in T3: nothing to do there
@@ -179,6 +182,9 @@ func (ix *Index) create(k *Kind, name string, sev int) (*Resolved, error) {
 // never passes --force, so T3 refuses to remove a project that has threads
 // (archived ones too). Then T3 keeps it, and close says so.
 func (ix *Index) close(p *Place) (string, error) {
+	if p.Scratch {
+		return "", fmt.Errorf("No project is T3's own place for threads without a project; it can't be closed")
+	}
 	if p.Remote || p.host == nil {
 		if p.T3 != "" {
 			return "", fmt.Errorf("%s is on %s; close it there", p.Name, p.Machine)
@@ -250,8 +256,8 @@ func (ix *Index) checks(reach bool) []Finding {
 		}
 	}
 	for _, p := range ix.Places {
-		if p.Offline {
-			continue // an old list: nothing to act on until its machine is back
+		if p.Offline || p.Scratch {
+			continue // an old list, or T3's own scratch: nothing to tidy
 		}
 		open := p.status() == "open"
 		switch {
@@ -270,7 +276,7 @@ func (ix *Index) checks(reach bool) []Finding {
 		if p.T3 != "" && !p.Remote && p.Exists {
 			n := 0
 			for _, q := range local {
-				if q != p && q.Owner == p.Owner && q.Host == p.Host && within(q.Path, p.Path) {
+				if q != p && !q.Scratch && q.Owner == p.Owner && q.Host == p.Host && within(q.Path, p.Path) {
 					n++
 				}
 			}

@@ -236,8 +236,8 @@ detect = "git"        # git: only repositories. any: every folder.
 # listed here and changed there; nothing is copied between machines.
 #
 # [[machine]]
-# name = "mallard"        # as T3 names it (tr3x envs)
-# ssh  = "mallard"        # the ssh destination; default name
+# name = "buildbox"        # as T3 names it (tr3x envs)
+# ssh  = "buildbox"        # the ssh destination; default name
 # t3p  = "~/.local/bin/t3p"
 
 # A kind you create from a template, with due dates by severity, that also

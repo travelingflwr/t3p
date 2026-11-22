@@ -641,3 +641,36 @@ func TestRemoteCommandQuoting(t *testing.T) {
 		t.Fatal("expand")
 	}
 }
+
+func TestScratchIsT3sNoProject(t *testing.T) {
+	w := newWorld(t)
+	w.dir(".t3/scratch", false)
+	w.dir("Projects/a", true)
+	w.projects(`[{"id":"envA/a","title":"a","subtitle":"~/Projects/a · Mac","detail":"1h ago"},
+	 {"id":"envA/s","title":"No project","subtitle":"~/.t3/scratch · Mac","detail":"300d ago"},
+	 {"id":"envB/s","title":"No project","subtitle":"/home/u/.t3/scratch · otherbox","detail":"2d ago"}]`)
+	_, ix := w.index()
+	if !ix.Places[0].Scratch || !ix.Places[1].Scratch || ix.Places[2].Name != "a" {
+		t.Fatalf("no project first, on each machine: %s", names(ix.Places))
+	}
+	r := rows(ix, ix.Places)
+	if r[0].Title != "New thread, no project" || r[1].Subtitle != "A thread that isn't in any project · otherbox" {
+		t.Fatalf("rows: %+v", r[:2])
+	}
+	for _, f := range ix.checks(false) {
+		if strings.Contains(f.Key, "scratch") {
+			t.Fatalf("scratch isn't tidied: %+v", f)
+		}
+	}
+	p := ix.Places[0]
+	if _, err := ix.close(p); err == nil {
+		t.Fatal("scratch can't be closed")
+	}
+	res, err := ix.resolve(p)
+	if err != nil || res.Worktrees || res.T3 == "" {
+		t.Fatalf("a scratch thread opens straight in the composer: %+v %v", res, err)
+	}
+	if !isScratch(`C:\Users\a\.t3\scratch`) || isScratch("/home/u/notes/scratch") {
+		t.Fatal("isScratch")
+	}
+}

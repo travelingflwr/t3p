@@ -545,6 +545,14 @@ func rows(ix *Index, places []*Place) []Row {
 		if len(p.Tags) > 0 {
 			sub += " · #" + strings.Join(p.Tags, " #")
 		}
+		if p.Scratch {
+			title, sub := "New thread, no project", "A thread that isn't in any project"
+			if p.Machine != "" {
+				sub += " · " + p.Machine
+			}
+			out = append(out, Row{ID: p.Key, Title: title, Subtitle: sub, Icon: "plus"})
+			continue
+		}
 		icon := "folder"
 		if p.T3 == "" {
 			icon = "plus"
