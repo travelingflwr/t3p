@@ -27,7 +27,8 @@ const usage = `t3p: your work in T3 Code, by kind.
   t3p new <kind> <name> [--sev N]        create one from the kind's template, add it to T3
   t3p note <place> [text…] [--clear]     a one-line note: what is this?
   t3p tag <place> +tag -tag …
-  t3p park | open | close <place>        close takes it off T3's list; the folder stays
+  t3p park | open | close <place>        close: out of the picker, off T3's list if it has no
+                                         threads. Nothing is ever deleted; --force is never used
   t3p sev <place> <N>                    a severity, for kinds with a cadence
   t3p updated <place>                    you just sent an update: the next one is due from now
   t3p check [--json] [--reach]           what needs tidying up (--reach also checks shares)
@@ -301,7 +302,13 @@ func run(argv []string) error {
 	case "open":
 		return mutate(func(ix *Index, p *Place) error { e.store.meta(p.Key).Status = ""; return nil })
 	case "close":
-		return mutate(func(ix *Index, p *Place) error { return ix.close(p) })
+		return mutate(func(ix *Index, p *Place) error {
+			msg, err := ix.close(p)
+			if err == nil {
+				fmt.Println(msg)
+			}
+			return err
+		})
 
 	case "sev":
 		if err := need(2, "<place> <N>"); err != nil {
@@ -466,16 +473,24 @@ func facts(ix *Index, p *Place) []string {
 	return f
 }
 
+// whatItIs is the best answer to "what was this?": a note, the README's
+// first line, the newest thread's title, or at least where it is.
+func whatItIs(p *Place) string {
+	switch {
+	case p.Note != "":
+		return p.Note
+	case p.Desc != "":
+		return p.Desc
+	case p.Thread != "":
+		return "Last thread: " + clip(p.Thread, 70)
+	}
+	return p.Display
+}
+
 func rows(ix *Index, places []*Place) []Row {
 	out := []Row{}
 	for _, p := range places {
-		sub := p.Note
-		if sub == "" {
-			sub = p.Desc
-		}
-		if sub == "" {
-			sub = p.Display
-		}
+		sub := whatItIs(p)
 		if p.Machine != "" {
 			sub += " · " + p.Machine
 		}
@@ -500,13 +515,7 @@ func printTable(ix *Index, places []*Place) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tFACTS\tWHAT IT IS")
 	for _, p := range places {
-		what := p.Note
-		if what == "" {
-			what = p.Desc
-		}
-		if what == "" {
-			what = p.Display
-		}
+		what := whatItIs(p)
 		if p.Machine != "" {
 			what += " · " + p.Machine
 		}

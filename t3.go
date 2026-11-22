@@ -168,6 +168,31 @@ func (t *T3) IDFor(h Host, machine, folder string) (string, error) {
 	return "", fmt.Errorf("T3 has %s, but t3p can't find its id yet; try again in a moment", h.Display(folder))
 }
 
+// LatestThread is the title of the newest thread in the project at folder,
+// for a place with nothing else to say about itself. Only threads of that
+// exact project count (a folder inside another project names that one too),
+// and titles that are system text, like "<recommended_plugins>", are skipped.
+func (t *T3) LatestThread(h Host, folder, projectID string) string {
+	out, err := h.Run(30*time.Second, t.t3argv(h, "thread", "list", "--project", folder, "--json")...)
+	if err != nil {
+		return ""
+	}
+	var threads []struct {
+		ProjectID string `json:"projectId"`
+		Title     string `json:"title"`
+	}
+	if json.Unmarshal([]byte(out), &threads) != nil {
+		return ""
+	}
+	for _, th := range threads { // newest first
+		title := strings.TrimSpace(th.Title)
+		if th.ProjectID == projectID && title != "" && !strings.HasPrefix(title, "<") {
+			return title
+		}
+	}
+	return ""
+}
+
 // Remove takes a project off T3's list. Never --force: T3 refuses when
 // that would lose something, and that refusal is shown.
 func (t *T3) Remove(h Host, projectID string) error {

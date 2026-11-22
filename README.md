@@ -20,7 +20,7 @@ t3p started as a T3-flavoured [rex-projects](https://github.com/almonk/rex-proje
 | **New T3 Thread…** `⌥⌘T` | Pick anything: what T3 has (on every machine tr3x follows), what it doesn't yet, or **Add Folder…**. A folder T3 doesn't have is added first. Then pick where to work (the folder, a worktree, or a new worktree; the last one used is listed first), and tr3x's composer opens for the first message. |
 | **New *Kind*…** | For each kind with `create = true`: name it, pick a severity, and it's created from the template, added to T3 with its shares, and opened. |
 | **Tidy Up Work…** | Each finding comes with its fixes: add to T3, park, close, mark an update as sent, or don't ask again. |
-| **Manage Work…** | Describe, tag, park, close (it comes off T3's list and the folder stays), reopen, or set the severity. |
+| **Manage Work…** | Describe, tag, park, close, reopen, or set the severity. Closing takes it out of the picker, and off T3's list only if it has no threads. **t3p never deletes anything:** it never touches folders and never passes `--force` to T3, so T3 refuses to remove a project with threads, and t3p says so. |
 | **Open Shell in…** | A plain shell session in the folder, which is what rex-projects did. |
 
 ## Install

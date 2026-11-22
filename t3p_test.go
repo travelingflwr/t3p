@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -39,6 +40,7 @@ if [ "$1 $2" = "project add" ]; then
   printf '[{"id":"envA/new1","title":"x","subtitle":"%s · Mac","detail":"just now"}]' "$last" > "`+w.fake+`/projects.json"
   exit 0
 fi
+if [ "$1 $2" = "project remove" ] && [ "$3" = busy ]; then echo "[1] ERROR (#2): ProjectNotEmptyError: Project busy is not empty." >&2; exit 1; fi
 if [ "$1 $2" = "project remove" ]; then echo "Removed project $3."; exit 0; fi
 exit 1`)
 	t.Setenv("T3P_TR3X", filepath.Join(w.fake, "tr3x"))
@@ -348,7 +350,7 @@ func TestChecks(t *testing.T) {
 	p, _ := ix.one("b")
 	e.store.meta(p.Key).Ignore = []string{"untracked"}
 	gone, _ := ix.one("gone")
-	if err := ix.close(gone); err != nil {
+	if _, err := ix.close(gone); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(w.t3log(), "project remove gone") {
@@ -368,7 +370,7 @@ func TestRemoteProjectsAreNotClosedHere(t *testing.T) {
 	w.projects(`[{"id":"envB/r","title":"far","subtitle":"~/x · otherbox"}]`)
 	_, ix := w.index()
 	p, _ := ix.one("far")
-	if err := ix.close(p); err == nil || !strings.Contains(err.Error(), "otherbox") {
+	if _, err := ix.close(p); err == nil || !strings.Contains(err.Error(), "otherbox") {
 		t.Fatalf("close on another machine: %v", err)
 	}
 }
@@ -414,5 +416,83 @@ func TestMkdir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(parent, "plain", ".git")); err == nil {
 		t.Fatal("without --git, a plain folder")
+	}
+}
+
+// A project with threads: T3 refuses to remove it without --force, which t3p
+// never passes. t3p closes it in its own list and says T3 kept it.
+func TestCloseNeverForcesAndNeverDeletes(t *testing.T) {
+	w := newWorld(t)
+	dir := w.dir("Projects/busy", true)
+	os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("x"), 0o644)
+	w.projects(`[{"id":"envA/busy","title":"busy","subtitle":"~/Projects/busy · Mac","detail":"1d ago"}]`)
+	e, ix := w.index()
+	p, _ := ix.one("busy")
+	msg, err := ix.close(p)
+	if err != nil || !strings.Contains(msg, "T3 keeps the project") {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if strings.Contains(w.t3log(), "--force") {
+		t.Fatal("never --force")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep.txt")); err != nil {
+		t.Fatal("the folder is untouched")
+	}
+	e.store.save()
+	_, ix = w.index()
+	p, _ = ix.one("busy")
+	if p.status() != "closed" || len(filterPlaces(ix, "", false)) != 0 {
+		t.Fatal("closed in t3p, out of the picker")
+	}
+	for _, f := range ix.checks(false) {
+		if f.Name == "busy" {
+			t.Fatalf("a closed project T3 kept isn't nagged about: %+v", f)
+		}
+	}
+}
+
+func TestLatestThreadFallback(t *testing.T) {
+	w := newWorld(t)
+	w.dir("Projects/quiet", true)
+	w.dir("Projects/told", true)
+	os.WriteFile(filepath.Join(w.home, "Projects/told/README.md"), []byte("Has a README.\n"), 0o644)
+	w.projects(`[{"id":"envA/q","title":"quiet","subtitle":"~/Projects/quiet · Mac"},
+	 {"id":"envA/t","title":"told","subtitle":"~/Projects/told · Mac"}]`)
+	// Newest first: system text, a parent project's thread, then the real one.
+	w.script("t3", `echo "$*" >> "`+w.fake+`/t3.log"
+echo '[{"projectId":"q","title":"<recommended_plugins>"},{"projectId":"parent","title":"Not this one"},{"projectId":"q","title":"Jeep Repair Planning"}]'`)
+	e, _ := w.index()
+	ix := e.index(true)
+	q, _ := ix.one("quiet")
+	if q.Thread != "Jeep Repair Planning" || whatItIs(q) != "Last thread: Jeep Repair Planning" {
+		t.Fatalf("thread %q, what %q", q.Thread, whatItIs(q))
+	}
+	told, _ := ix.one("told")
+	if told.Thread != "" || whatItIs(told) != "Has a README." {
+		t.Fatal("a README line wins, and saves the call")
+	}
+	if strings.Count(w.t3log(), "thread list") != 1 {
+		t.Fatalf("only places with nothing to say are asked: %s", w.t3log())
+	}
+}
+
+func TestGitOnlyForARepositorysTopFolder(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	top := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", top).CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+	inner := filepath.Join(top, "cases", "123")
+	os.MkdirAll(inner, 0o755)
+	if g := gitInfo(localHost{}, top); g == nil {
+		t.Fatal("the top folder has git state")
+	}
+	if g := gitInfo(localHost{}, inner); g != nil {
+		t.Fatalf("a folder inside it doesn't: %+v", g)
+	}
+	if g := gitInfo(localHost{}, t.TempDir()); g != nil {
+		t.Fatal("nor a folder outside any repository")
 	}
 }

@@ -35,8 +35,9 @@ type Place struct {
 	Exists   bool       `json:"exists"`
 	Remote   bool       `json:"remote,omitempty"` // another machine's: listed, not looked into
 	Git      *GitInfo   `json:"git,omitempty"`
-	Desc     string     `json:"desc,omitempty"` // from the README
-	Last     *time.Time `json:"last,omitempty"` // the latest of T3 activity and the last commit
+	Desc     string     `json:"desc,omitempty"`   // from the README
+	Thread   string     `json:"thread,omitempty"` // the newest thread's title, when there's no note or README line
+	Last     *time.Time `json:"last,omitempty"`   // the latest of T3 activity and the last commit
 	Due      *time.Time `json:"due,omitempty"`
 	Overdue  bool       `json:"overdue,omitempty"`
 	Meta
@@ -184,6 +185,10 @@ func buildIndex(cfg *Config, t3 *T3, store *Store, details bool) *Index {
 				defer func() { <-sem }()
 				p.Git = gitInfo(p.host, p.Path)
 				p.Desc = readmeLine(p.host, p.Path)
+				if p.Note == "" && p.Desc == "" && p.T3 != "" {
+					_, id, _ := strings.Cut(p.T3, "/")
+					p.Thread = ix.t3.LatestThread(p.host, p.Path, id)
+				}
 				if p.Git != nil && p.Git.LastCommit != nil && (p.Last == nil || p.Git.LastCommit.After(*p.Last)) {
 					p.Last = p.Git.LastCommit
 				}
@@ -312,7 +317,13 @@ func (ix *Index) find(q string) []*Place {
 
 // ---- git and README ------------------------------------------------------
 
+// gitInfo is the state of the repository whose top folder is dir, nil when
+// dir isn't one: a plain folder inside a repository (a case inside ~/Work)
+// would otherwise show that repository's branch and changes as its own.
 func gitInfo(h Host, dir string) *GitInfo {
+	if top, err := h.Run(10*time.Second, "git", "-C", dir, "rev-parse", "--show-cdup"); err != nil || strings.TrimSpace(top) != "" {
+		return nil
+	}
 	out, err := h.Run(10*time.Second, "git", "-C", dir, "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return nil

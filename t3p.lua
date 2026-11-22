@@ -112,6 +112,12 @@ local function tr3x(args, timeout)
   return r.stdout
 end
 
+-- tell shows a one-line result in the palette.
+local function tell(msg)
+  if msg == nil or msg == "" then return end
+  rex.ui.pick{ title = msg, confirm = "OK", items = { { id = "ok", title = "OK" } } }
+end
+
 -- A person who cancels is not worth a log line.
 local function stop(why)
   if why ~= nil and why ~= "cancelled" and why ~= "timeout" then rex.log("warn", "t3p: " .. tostring(why)) end
@@ -291,7 +297,8 @@ end
 local function apply_fix(fix, key, check)
   if fix == "add" then return open_thread(t3p_json({ "resolve", key }, 120)) end
   if fix == "ignore" then return t3p({ "ignore", key, check }) end
-  if fix == "updated" or fix == "park" or fix == "close" or fix == "open" then return t3p({ fix, key }) end
+  if fix == "close" then return tell(trim(t3p({ "close", key }))) end
+  if fix == "updated" or fix == "park" or fix == "open" then return t3p({ fix, key }) end
 end
 
 local function tidy()
@@ -326,7 +333,7 @@ local function manage()
     { id = "tag", title = "Tags…", subtitle = "+tag adds, -tag removes" },
     { id = "park", title = "Park", subtitle = "Keep it, out of the way" },
     { id = "open", title = "Reopen" },
-    { id = "close", title = "Close", subtitle = "Take it off T3's list; the folder stays" },
+    { id = "close", title = "Close", subtitle = "Out of the picker; nothing is deleted" },
     { id = "sev", title = "Severity…", subtitle = "For kinds with due dates" },
     { id = "updated", title = "I've just sent an update", subtitle = "The next one is due from now" },
   }
@@ -355,8 +362,9 @@ local function manage()
     local sure
     sure, why = rex.ui.pick{ title = "Close it?", confirm = "Choose", items = {
       { id = "keep", title = "Keep it open" },
-      { id = "close", title = "Close it", subtitle = "Off T3's list; the folder and its files stay" } } }
-    if sure == "close" then t3p({ "close", key }) else return stop(why) end
+      { id = "close", title = "Close it", subtitle = "Out of the picker, off T3's list if it has no threads. Nothing is deleted" } } }
+    if sure ~= "close" then return stop(why) end
+    tell(trim(t3p({ "close", key })))
   else
     t3p({ what, key })
   end

@@ -162,23 +162,33 @@ func (ix *Index) create(k *Kind, name string, sev int) (*Resolved, error) {
 	return ix.resolve(p)
 }
 
-// close takes p off T3's list (its folder stays) and marks it closed.
-func (ix *Index) close(p *Place) error {
-	if p.T3 != "" {
-		if p.Remote || p.host == nil {
-			return fmt.Errorf("%s is on %s; close it there", p.Name, p.Machine)
+// close marks p closed, so it leaves the picker, and takes it off T3's list
+// when T3 allows. Nothing is deleted: the folder is never touched, and t3p
+// never passes --force, so T3 refuses to remove a project that has threads
+// (archived ones too). Then T3 keeps it, and close says so.
+func (ix *Index) close(p *Place) (string, error) {
+	if p.Remote || p.host == nil {
+		if p.T3 != "" {
+			return "", fmt.Errorf("%s is on %s; close it there", p.Name, p.Machine)
 		}
-		_, id, _ := strings.Cut(p.T3, "/")
-		if err := ix.t3.Remove(p.host, id); err != nil {
-			return err
-		}
-		delete(ix.store.Last, p.T3)
+		return "", fmt.Errorf("%s isn't on this machine", p.Name)
 	}
-	if p.Remote {
-		return nil
+	msg := "Closed " + p.Name + "."
+	if p.T3 != "" {
+		_, id, _ := strings.Cut(p.T3, "/")
+		err := ix.t3.Remove(p.host, id)
+		switch {
+		case err == nil:
+			msg = "Closed " + p.Name + " and took it off T3's list. Its folder is untouched."
+			delete(ix.store.Last, p.T3)
+		case strings.Contains(err.Error(), "is not empty"):
+			msg = "Closed " + p.Name + " in t3p. T3 keeps the project because it has threads; nothing was removed."
+		default:
+			return "", err
+		}
 	}
 	ix.store.meta(p.Key).Status = "closed"
-	return nil
+	return msg, nil
 }
 
 // ---- Tidy Up -------------------------------------------------------------
@@ -199,7 +209,7 @@ type Finding struct {
 var fixTitles = map[string]string{
 	"add":     "Add to T3",
 	"park":    "Park it",
-	"close":   "Close it (take it off T3's list; the folder stays)",
+	"close":   "Close it (out of the picker; off T3's list if it has no threads; nothing is deleted)",
 	"open":    "Reopen it",
 	"updated": "I've just sent an update",
 	"ignore":  "Leave it, and don't ask again",
@@ -235,8 +245,6 @@ func (ix *Index) checks(reach bool) []Finding {
 				fixes("updated", "park"))
 		case p.T3 != "" && !p.Remote && !p.Exists:
 			raise(p, "orphan", "in T3, but its folder is gone: "+p.Display, fixes("close", "ignore"))
-		case p.Status == "closed" && p.T3 != "":
-			raise(p, "closed", "closed, but still on T3's list", fixes("close", "open"))
 		}
 		if p.kind != nil && p.T3 == "" && p.Exists && open {
 			raise(p, "untracked", "a "+p.kind.Name+" T3 doesn't have", fixes("add", "park", "ignore"))
@@ -266,7 +274,7 @@ func (ix *Index) checks(reach bool) []Finding {
 			}
 		}
 	}
-	order := map[string]int{"overdue": 0, "orphan": 1, "closed": 2, "unreachable": 3, "nested": 4, "stale": 5, "untracked": 6}
+	order := map[string]int{"overdue": 0, "orphan": 1, "unreachable": 3, "nested": 4, "stale": 5, "untracked": 6}
 	sort.SliceStable(out, func(i, j int) bool { return order[out[i].Check] < order[out[j].Check] })
 	return out
 }
