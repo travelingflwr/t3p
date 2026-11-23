@@ -674,3 +674,41 @@ func TestScratchIsT3sNoProject(t *testing.T) {
 		t.Fatal("isScratch")
 	}
 }
+
+func TestBoard(t *testing.T) {
+	w := newWorld(t)
+	w.dir(".t3/scratch", false)
+	for _, n := range []string{"busy", "recent", "old", "parked"} {
+		w.dir("Projects/"+n, true)
+	}
+	w.projects(`[{"id":"e/b","title":"busy","subtitle":"~/Projects/busy · Mac","detail":"3w ago"},
+	 {"id":"e/r","title":"recent","subtitle":"~/Projects/recent · Mac","detail":"2d ago"},
+	 {"id":"e/o","title":"old","subtitle":"~/Projects/old · Mac","detail":"3mo ago"},
+	 {"id":"e/p","title":"parked","subtitle":"~/Projects/parked · Mac","detail":"1h ago"},
+	 {"id":"e/s","title":"No project","subtitle":"~/.t3/scratch · Mac","detail":"just now"}]`)
+	e, ix := w.index()
+	p, _ := ix.one("parked")
+	e.store.meta(p.Key).Status = "parked"
+	e.store.save()
+	_, ix = w.index()
+	b, _ := ix.one("busy")
+	b.Git = &GitInfo{Branch: "main", Dirty: 2}
+	r, _ := ix.one("recent")
+	r.Git = &GitInfo{Branch: "main", Dirty: 1} // recent and unfinished
+	o0, _ := ix.one("old")
+	o0.Git = &GitInfo{Branch: "main", Dirty: 9} // uncommitted for months: forgotten, not today's
+	soon := ix.now.Add(3 * time.Hour)
+	o, _ := ix.one("old")
+	o.Due = &soon
+	got := board(ix, ix.now)
+	var line []string
+	for _, r := range got {
+		line = append(line, r.Section+":"+r.Title)
+	}
+	if strings.Join(line, ",") != "Due soon:old,Unfinished:recent,Unfinished:busy" {
+		t.Fatalf("board: %v", line)
+	}
+	if !strings.HasPrefix(got[2].Detail, "Unfinished · main ±2") {
+		t.Fatalf("detail: %q", got[1].Detail)
+	}
+}

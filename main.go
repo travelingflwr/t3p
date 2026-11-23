@@ -32,6 +32,7 @@ const usage = `t3p: your work in T3 Code, by kind.
   t3p sev <place> <N>                    a severity, for kinds with a cadence
   t3p updated <place>                    you just sent an update: the next one is due from now
   t3p check [--json] [--reach]           what needs tidying up (--reach also checks shares)
+  t3p board [--json]                     today: overdue, due soon, unfinished, active this week
   t3p ignore <place> <check>             don't raise that check for it again
   t3p browse [--kind K] [dir]            folders, for the palette's folder browser
   t3p mkdir [--kind K] [--git] <dir> <name>  a new folder in dir (--git: a repository)
@@ -428,6 +429,22 @@ func run(argv []string) error {
 			return err
 		}
 		return mkdirCmd(e, a)
+
+	case "board":
+		ix := e.index(true)
+		b := board(ix, ix.now)
+		if a.has("json") {
+			return printJSON(b)
+		}
+		if len(b) == 0 {
+			fmt.Println("Nothing on the board today.")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		for _, r := range b {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", r.Section, r.Title, r.Detail)
+		}
+		return w.Flush()
 
 	case "browse":
 		return browse(e, a)

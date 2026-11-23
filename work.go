@@ -209,6 +209,49 @@ func (ix *Index) close(p *Place) (string, error) {
 	return msg, nil
 }
 
+// ---- Today's Board -------------------------------------------------------
+
+type BoardRow struct {
+	Row
+	Section string `json:"section"`
+}
+
+// board is what to look at today, most pressing first: updates overdue and
+// due within a day (kinds with a cadence, like cases), then work that's
+// unfinished (uncommitted or unpushed, touched in the last 30 days), then
+// what was active this week.
+// Each place is listed once, in its most pressing section. Parked, closed,
+// offline and T3's scratch stay off it.
+func board(ix *Index, now time.Time) []BoardRow {
+	sections := []struct {
+		name string
+		in   func(p *Place) bool
+	}{
+		{"Overdue", func(p *Place) bool { return p.Overdue }},
+		{"Due soon", func(p *Place) bool { return p.Due != nil && p.Due.Sub(now) < 24*time.Hour }},
+		// Unfinished and recent: older uncommitted work is forgotten, not today's.
+		{"Unfinished", func(p *Place) bool {
+			return p.Git != nil && (p.Git.Dirty > 0 || p.Git.Ahead > 0) && p.Last != nil && now.Sub(*p.Last) < 30*24*time.Hour
+		}},
+		{"This week", func(p *Place) bool { return p.Last != nil && now.Sub(*p.Last) < 7*24*time.Hour }},
+	}
+	out := []BoardRow{}
+	shown := map[*Place]bool{}
+	all := rows(ix, ix.Places)
+	for _, s := range sections {
+		for i, p := range ix.Places {
+			if shown[p] || p.Scratch || p.Offline || p.status() != "open" || !s.in(p) {
+				continue
+			}
+			shown[p] = true
+			r := all[i]
+			r.Detail = strings.TrimPrefix(s.name+" · "+r.Detail, " · ")
+			out = append(out, BoardRow{Row: r, Section: s.name})
+		}
+	}
+	return out
+}
+
 // ---- Tidy Up -------------------------------------------------------------
 
 type Fix struct {

@@ -6,6 +6,7 @@
 --   New T3 Thread…          (⌥⌘T) pick anything, or add a folder, then where
 --                           to work; tr3x's composer opens for the first message
 --   New <Kind>…             for each kind with create = true (a case, say)
+--   Today's Board…          (⌃⌘B) overdue, due soon, unfinished, this week
 --   Tidy Up Work…           what's stale, untracked, orphaned, overdue
 --   Manage Work…            describe, tag, park, close, reopen, severity
 --   Open Shell in…          a plain shell session in a place's folder
@@ -14,7 +15,7 @@
 --
 --     require("t3p")
 --
--- Optional: require("t3p").setup{ key = "alt+cmd+t", bin = "~/.local/bin/t3p" }
+-- Optional: require("t3p").setup{ key = "alt+cmd+t", board_key = "ctrl+cmd+b", bin = "~/.local/bin/t3p" }
 -- Written for Lua 5.1 (what Rex embeds). Every command runs through rex.exec
 -- with an argument list, never a shell.
 
@@ -23,8 +24,8 @@ local M = {}
 local has_ui, ui = pcall(function() return rex.ui end)
 if not has_ui or ui == nil then return M end
 
-local config = { key = "alt+cmd+t", bin = nil, tr3x_config = nil }
-local bound_key = nil
+local config = { key = "alt+cmd+t", board_key = "ctrl+cmd+b", bin = nil, tr3x_config = nil }
+local bound_key, bound_board_key = nil, nil
 
 local is_windows = (package and package.config or "/"):sub(1, 1) == "\\"
 
@@ -326,6 +327,16 @@ local function tidy()
   apply_fix(fix, f.key, f.check)
 end
 
+-- Today's Board: overdue and due soon (kinds with due dates), unfinished
+-- work, then this week's. Picking one opens a thread in it.
+local function today()
+  local rows = t3p_json({ "board", "--json" }, 120)
+  if #rows == 0 then return tell("Nothing on the board today") end
+  local key, why = rex.ui.pick{ title = "Today", placeholder = "Filter", confirm = "New Thread", items = rows }
+  if key == nil then return stop(why) end
+  open_thread(t3p_json({ "resolve", key }, 120))
+end
+
 local function manage()
   local key, why = pick_place("Manage Work", { "rows", "--all" })
   if key == nil then return stop(why) end
@@ -401,6 +412,8 @@ end
 
 action("t3p_thread", "New T3 Thread…", "Pick any of your work, or add a folder to T3, and start a thread",
   "t3p t3 project case folder repo worktree new thread add start", new_thread)
+action("t3p_today", "Today's Board…", "What's overdue, due soon, unfinished and active this week; pick one to start a thread",
+  "t3p t3 today board due overdue unfinished week dashboard agenda", today)
 action("t3p_tidy", "Tidy Up Work…", "What's stale, untracked, orphaned or overdue, with a fix for each",
   "t3p t3 project case clean stale orphan overdue untracked nested", tidy)
 action("t3p_manage", "Manage Work…", "Describe, tag, park, close or reopen a project or case",
@@ -438,8 +451,15 @@ local function bind_key(key)
   if key then rex.bind(key, "t3p_thread"); bound_key = key end
 end
 
+local function bind_board_key(key)
+  if bound_board_key ~= nil then pcall(rex.unbind, bound_board_key) end
+  bound_board_key = nil
+  if key then rex.bind(key, "t3p_today"); bound_board_key = key end
+end
+
 function M.setup(opts)
   opts = opts or {}
+  if opts.board_key ~= nil then bind_board_key(opts.board_key) end
   if opts.bin ~= nil then config.bin = opts.bin; tools = nil end
   if opts.tr3x_config ~= nil then config.tr3x_config = opts.tr3x_config; tools = nil end
   if opts.key ~= nil then bind_key(opts.key) end
@@ -447,9 +467,10 @@ function M.setup(opts)
 end
 
 bind_key(config.key)
+bind_board_key(config.board_key)
 
 M._internal = { find_tools = find_tools, t3p = t3p, open_thread = open_thread, new_thread = new_thread,
-  tidy = tidy, manage = manage, browse = browse, new_folder = new_folder, apply_fix = apply_fix,
+  tidy = tidy, manage = manage, today = today, browse = browse, new_folder = new_folder, apply_fix = apply_fix,
   reset = function() tools = nil end }
 
 return M
