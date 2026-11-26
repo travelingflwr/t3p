@@ -9,6 +9,7 @@
 --   Today's Board…          (⌃⌘B) overdue, due soon, unfinished, this week
 --   Tidy Up Work…           what's stale, untracked, orphaned, overdue
 --   Manage Work…            describe, tag, park, close, reopen, severity
+--   Go to Thread…           agent threads in Rex tabs on every machine; jump to one
 --   Open Shell in…          a plain shell session in a place's folder
 --
 -- Install: put this file next to init.lua, after require("tr3x"):
@@ -402,6 +403,43 @@ local function shell()
 end
 
 ---------------------------------------------------------------------------
+-- Go to Thread
+---------------------------------------------------------------------------
+
+-- caller_label is the label of the Rex app that ran the action, such as
+-- "iPad": the name another host's server knows it by.
+local function caller_label(ctx)
+  if not (ctx and ctx.client_id) then return nil end
+  local ok, r = pcall(rex.call, "client.list", {})
+  if not ok or type(r) ~= "table" then return nil end
+  for _, c in ipairs(r.clients or r) do
+    if c.client_id == ctx.client_id then return c.info and c.info.label end
+  end
+  return nil
+end
+
+-- go_to_thread lists the agent threads in Rex tabs on every host, newest
+-- first, and shows the one picked. A thread on this server opens directly;
+-- one on another host goes through that host's server.
+local function go_to_thread(ctx)
+  local listing = t3p_json({ "threads", "--rows" }, 60)
+  for _, w in ipairs(listing.warnings or {}) do rex.log("warn", "t3p: " .. w) end
+  local rows = listing.rows or {}
+  if #rows == 0 then return tell("No agent threads are running in Rex tabs") end
+  local picked, why = rex.ui.pick{ title = "Go to Thread", placeholder = "Filter by title, topic or machine",
+    confirm = "Go", items = rows }
+  if picked == nil then return stop(why) end
+  local t = rex.json.decode(picked)
+  if t.host == nil or t.host == "" then
+    rex.client.queue("session.select", { session_id = t.session_id, window_id = t.window_id })
+    return
+  end
+  local label = caller_label(ctx)
+  if label == nil then fail("Can't tell which Rex app asked, so can't show a thread on " .. t.host) end
+  t3p({ "threads", "go", "--host", t.host, "--client", label, "--session", t.session_id, "--window", t.window_id }, 30)
+end
+
+---------------------------------------------------------------------------
 -- Registering
 ---------------------------------------------------------------------------
 
@@ -418,6 +456,8 @@ action("t3p_tidy", "Tidy Up Work…", "What's stale, untracked, orphaned or over
   "t3p t3 project case clean stale orphan overdue untracked nested", tidy)
 action("t3p_manage", "Manage Work…", "Describe, tag, park, close or reopen a project or case",
   "t3p t3 project case note describe tag park close reopen severity", manage)
+action("t3p_go_thread", "Go to Thread…", "Agent threads in Rex tabs on every machine, newest first; jump to one",
+  "t3p thread threads agent claude codex go jump switch find topic session tab", go_to_thread)
 action("t3p_shell", "Open Shell in…", "A shell session in a project's or case's folder",
   "t3p shell terminal session project case folder", shell)
 
@@ -470,7 +510,7 @@ bind_key(config.key)
 bind_board_key(config.board_key)
 
 M._internal = { find_tools = find_tools, t3p = t3p, open_thread = open_thread, new_thread = new_thread,
-  tidy = tidy, manage = manage, today = today, browse = browse, new_folder = new_folder, apply_fix = apply_fix,
+  tidy = tidy, manage = manage, go_to_thread = go_to_thread, today = today, browse = browse, new_folder = new_folder, apply_fix = apply_fix,
   reset = function() tools = nil end }
 
 return M

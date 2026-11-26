@@ -48,6 +48,9 @@ type Config struct {
 	StaleAfter string     `toml:"stale_after"` // default 90d
 	Kinds      []*Kind    `toml:"kind"`
 	Machines   []*Machine `toml:"machine"` // other machines whose t3p owns their places
+	// Rex hosts (labels from `rex hosts`) whose tabs `t3p threads` looks at,
+	// besides this machine's server. Unset: every host Rex lists.
+	RexHosts []string `toml:"rex_hosts"`
 
 	stale time.Duration
 	Path  string // the file it was read from

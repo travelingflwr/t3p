@@ -37,6 +37,8 @@ const usage = `t3p: your work in T3 Code, by kind.
   t3p browse [--kind K] [dir]            folders, for the palette's folder browser
   t3p mkdir [--kind K] [--git] <dir> <name>  a new folder in dir (--git: a repository)
   t3p last <env/project> [workspace]     the worktree a project was last opened in
+  t3p threads [--json|--rows]            agent threads in Rex tabs, on every host, newest first
+  t3p threads go --client APP --session S [--window W] [--host H]   show one in a Rex app
   t3p config [init]                      where the config is; init writes an example
   t3p doctor                             check the setup, and each machine's
   t3p export                             this machine's own places, for another t3p
@@ -147,6 +149,9 @@ func run(argv []string) error {
 	}
 	if cmd == "config" {
 		return configCmd(rest)
+	}
+	if cmd == "threads" {
+		return threadsCmd(rest)
 	}
 	e, err := setup()
 	if err != nil {
